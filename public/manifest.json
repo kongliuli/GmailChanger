@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "GmailChanger - Gmail 迁移助手",
+  "version": "0.1.1",
+  "description": "在本地把 Gmail 过滤规则、标签和发件地址转换为可迁移文件。邮件数据不会上传。",
+  "action": { "default_title": "打开 GmailChanger" },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": [],
+  "host_permissions": []
+}
