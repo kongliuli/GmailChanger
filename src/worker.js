@@ -10,14 +10,16 @@ self.onmessage = async ({ data }) => {
       result = { warnings: expanded.warnings, files: expanded.files.map(file => ({ blob: file, path: file.sourcePath || file.name, name: file.name, size: file.size, lastModified: file.lastModified || 0 })) };
     } else if (data.operation === 'analyze') {
       const seen = new Set(data.seen || []);
+      const evidenceSeen = new Set(data.evidenceSeen || []);
       let lastProgress = 0;
-      result = await analyzeMailbox(data.file, { seen, sentHint: data.sentHint, onProgress: progress => {
+      result = await analyzeMailbox(data.file, { seen, evidenceSeen, sentHint: data.sentHint, single: data.single, onProgress: progress => {
         const now = Date.now();
         if (now - lastProgress >= 100 || progress.bytesRead === progress.totalBytes) {
           self.postMessage({ progress }); lastProgress = now;
         }
       } });
       result.seen = [...seen];
+      result.evidenceSeen = [...evidenceSeen];
     } else throw new Error('Unknown worker operation');
     self.postMessage({ result });
   } catch (error) { self.postMessage({ error: error.message }); }

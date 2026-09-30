@@ -1,4 +1,6 @@
 // ponytail: header-only Takeout parser; full MIME/address parsing needs a MIME library.
+import { classifyAccountMessage, createAccountSummary } from './accounts.js';
+
 const MAX_LINE = 64 * 1024;
 const MAX_HEADERS = 256 * 1024;
 const MAX_IDS = 100000;
@@ -7,6 +9,7 @@ const SYSTEM = new Set([...SENT, 'inbox', 'all mail', 'allmail', 'draft', 'draft
 const ENVELOPE = /^From \S+ (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?\s+(?:\S+\s+)?\d{4}(?:\s.*)?$/;
 const HEADER = /^([!-9;-~]+):[ \t]*(.*)$/;
 const ADJACENT_WORDS = /=\?[^?\s]+\?[bq]\?[^?\s]+\?=[ \t\r\n]+=\?/i;
+const HEADER_FIELDS = ['from', 'message-id', 'x-gmail-labels', 'subject', 'date', 'list-unsubscribe', 'auto-submitted', 'x-auto-response-suppress'];
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 
 /** Decode RFC 2047 words; leave the entire value intact if their syntax is malformed. */
@@ -94,12 +97,15 @@ function parseSender(value, decode = value => value) {
 }
 
 /** Analyze one Blob/File locally. messageCount includes duplicates; sender counts do not.
- * seen is caller-owned and stores trimmed, case-preserved Message-IDs only when counted.
+ * seen is caller-owned and stores trimmed, case-preserved Message-IDs only when counted;
+ * evidenceSeen deduplicates account-evidence counting the same way. single marks a
+ * standalone RFC822 (.eml) file so the missing mbox envelope is not warned about.
  * Local repeats take precedence over cross-file repeats; decodeWarnings contains counted notes.
  */
-export async function analyzeMailbox(file, { onProgress = () => {}, signal, sentHint = false, seen } = {}) {
+export async function analyzeMailbox(file, { onProgress = () => {}, signal, sentHint = false, seen, evidenceSeen, single = false } = {}) {
   if (!file || typeof file.stream !== 'function') throw new TypeError('Expected a Blob or File with stream().');
   const labels = new Set(), senders = new Map(), warnings = new Set(), ids = new Set(), senderIds = new Set();
+  const accountSummary = createAccountSummary();
   let messageCount = 0, duplicateCount = 0, crossFileDuplicates = 0, bytesRead = 0;
   let replacementCount = 0, invalidFromCount = 0;
   const decode = raw => {
@@ -116,7 +122,7 @@ export async function analyzeMailbox(file, { onProgress = () => {}, signal, sent
   const progress = () => onProgress({ bytesRead, totalBytes: file.size ?? 0, messageCount });
 
   function flushField() {
-    if (['from', 'message-id', 'x-gmail-labels'].includes(field)) {
+    if (HEADER_FIELDS.includes(field)) {
       const values = fields.get(field) || [];
       values.push(value);
       fields.set(field, values);
@@ -148,6 +154,26 @@ export async function analyzeMailbox(file, { onProgress = () => {}, signal, sent
     const from = fields.get('from') || [];
     const parsedFrom = from.map(value => parseSender(value, decode));
     invalidFromCount += parsedFrom.filter(email => !email).length;
+    if (accountSummary) {
+      const address = from.length === 1 ? parsedFrom[0] : null;
+      const bracket = from.length === 1 && /^(.*?)</.exec(from[0]);
+      const category = classifyAccountMessage({
+        subject: decode((fields.get('subject') || [])[0] || ''),
+        listUnsubscribe: (fields.get('list-unsubscribe') || []).length > 0,
+        autoSubmitted: /^auto-/i.test((fields.get('auto-submitted') || [])[0] || ''),
+        xAutoResponseSuppress: (fields.get('x-auto-response-suppress') || []).length > 0,
+      });
+      const parsedDate = Date.parse((fields.get('date') || [])[0] || '');
+      const time = Number.isFinite(parsedDate) ? parsedDate : null;
+      const crossFileEvidence = id && evidenceSeen?.has(id);
+      if (!duplicate && !crossFileEvidence) {
+        accountSummary.add({ domain: address ? address.slice(address.lastIndexOf('@') + 1) : null, name: bracket ? decode(bracket[1].trim()).trim() : '', category, time, id: id || '' });
+        if (id && evidenceSeen) {
+          if (evidenceSeen.size < MAX_IDS) evidenceSeen.add(id);
+          else warn('跨文件账号清点去重仅记录前 100000 个 Message-ID；后续重复可能重复计数。');
+        }
+      }
+    }
     if (sentHint || messageLabels.some(label => SENT.has(label.toLowerCase()))) {
       const email = from.length === 1 ? parsedFrom[0] : null;
       if (!email) warn('Some sent messages have missing, multiple, or unsupported From addresses; these were not counted as sender identities.');
@@ -180,7 +206,7 @@ export async function analyzeMailbox(file, { onProgress = () => {}, signal, sent
     if (!active) {
       if (!preambleSeen && !tooLong && HEADER.test(text)) {
         startMessage();
-        warn('Input contains a message without an mbox envelope; it was treated as a single RFC 822 message.');
+        if (!single) warn('Input contains a message without an mbox envelope; it was treated as a single RFC 822 message.');
       } else {
         if (text || tooLong) {
           preambleSeen = true;
@@ -252,7 +278,7 @@ export async function analyzeMailbox(file, { onProgress = () => {}, signal, sent
     if (invalidFromCount) decodeWarnings.push(`发现 ${invalidFromCount} 个无法保守解析的 From 值；未将其计入发件人身份。`);
     decodeWarnings.forEach(warn);
     progress();
-    return { messageCount, labels: [...labels].sort(compare), senders: [...senders].map(([email, count]) => ({ email, count })).sort((a, b) => b.count - a.count || compare(a.email, b.email)), warnings: [...warnings], duplicateCount, crossFileDuplicates, decodeWarnings };
+    return { messageCount, labels: [...labels].sort(compare), senders: [...senders].map(([email, count]) => ({ email, count })).sort((a, b) => b.count - a.count || compare(a.email, b.email)), warnings: [...warnings], duplicateCount, crossFileDuplicates, decodeWarnings, accounts: accountSummary.snapshot() };
   } catch (error) {
     await reader.cancel(error).catch(() => {});
     throw error;

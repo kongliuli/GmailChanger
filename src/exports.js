@@ -1,4 +1,5 @@
 import { getTarget, defaultFolders } from './targets.js';
+import { EVIDENCE_KEYS, changeEmailLink } from './accounts.js';
 
 function safeCsv(value) {
   let text = String(value ?? '');
@@ -92,8 +93,52 @@ ${warnings.length ? warnings.map(warning => `- ${warning}`).join('\n') : '- 无�
 `;
 }
 
-export function downloadText(name, content, type = 'text/plain;charset=utf-8') {
-  const url = URL.createObjectURL(new Blob([content], { type }));
+const dateOnly = value => value === null || value === undefined ? '' : new Date(value).toISOString().slice(0, 10);
+
+/** Account inventory CSV covers all three buckets; links come from the local catalog only. */
+export function accountsCsv(report) {
+  const rows = [];
+  const emit = (bucket, record) => {
+    const site = changeEmailLink(record.domain);
+    rows.push([safeCsv(bucket), safeCsv(record.domain), safeCsv(record.name || ''), ...EVIDENCE_KEYS.map(key => record.counts[key]), record.mailingCount, record.messageCount, dateOnly(record.first), dateOnly(record.last), safeCsv(site?.url || ''), safeCsv(site?.note || '')].join(','));
+  };
+  for (const record of report.evidence) emit('有账号证据', record);
+  for (const record of report.mailingOnly) emit('仅通讯', record);
+  for (const record of report.unclassified.shown) emit('未分类', record);
+  return '\uFEFF分类,域名,名称,注册,验证,收据,欢迎,安全,通讯,邮件数,首次,最近,改绑链接,备注\r\n' + rows.join('\r\n');
+}
+
+export function accountsMarkdown(report) {
+  const evidenceLine = record => {
+    const site = changeEmailLink(record.domain);
+    const counts = EVIDENCE_KEYS.filter(key => record.counts[key]).map(key => `${key}×${record.counts[key]}`).join(' ');
+    const link = site?.url ? `[更改邮箱](${site.url})` : '未收录（请手动查找该服务的账户设置）';
+    return `- **${record.domain}**${record.name ? `（${record.name}）` : ''} — ${counts || '—'} · ${dateOnly(record.first) || '?'} ~ ${dateOnly(record.last) || '?'} · ${link}${site?.note ? `。${site.note}` : ''}`;
+  };
+  const unclassified = report.unclassified;
+  return `# 账号清点报告
+
+生成时间：${stamp()}
+
+> 本报告由邮件头部特征推断，**不保证完整**。未分类一节包含仅通过发件域观察到、但没有识别出注册/验证/收据/安全特征的邮件来源（可能包含个人联系人）。营销通讯不作为账号证据。请在改绑后用测试邮件验证。
+
+## 有账号证据（${report.evidence.length} 个域名）
+
+${report.evidence.length ? report.evidence.map(evidenceLine).join('\n') : '- （未识别到有账号证据的域名。）'}
+
+## 仅通讯（${report.mailingOnly.length} 个域名，未计入账号证据）
+
+${report.mailingOnly.length ? report.mailingOnly.map(record => `- ${record.domain} — 通讯 ${record.mailingCount} 封`).join('\n') : '- （无。）'}
+
+## 未分类（${unclassified.total} 个域名，请人工复核）
+
+${unclassified.shown.length ? unclassified.shown.map(record => `- ${record.domain} — ${record.messageCount} 封 · ${dateOnly(record.first) || '?'} ~ ${dateOnly(record.last) || '?'}`).join('\n') : '- （无。）'}
+${unclassified.shown.length < unclassified.total ? `\n（仅显示前 ${unclassified.shown.length} 个，共 ${unclassified.total} 个；完整清单见 accounts.csv。）\n` : ''}
+${report.overflowDomains ? `\n> 发件域超过上限，另有 ${report.overflowDomains} 个新域名未记录。\n` : ''}${report.unknownFrom ? `\n> ${report.unknownFrom} 封邮件的发件地址无法解析，未计入任何域名。\n` : ''}
+`;
+}
+
+export function downloadText(name, content, type = 'text/plain;charset=utf-8') {  const url = URL.createObjectURL(new Blob([content], { type }));
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = name;

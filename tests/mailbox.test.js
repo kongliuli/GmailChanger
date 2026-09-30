@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeMailbox, buildFolders, decodeHeaderValue } from '../src/mailbox.js';
+import { createAccountSummary } from '../src/accounts.js';
 
 const envelope = 'From sender@example.com Sat Jan 01 00:00:00 +0000 2022\r\n';
 const message = (headers, body = 'body\r\n') => envelope + headers + '\r\n\r\n' + body;
@@ -255,6 +256,71 @@ test('replacement characters and unsupported From values produce counted Chinese
   assert.ok(result.decodeWarnings[0].includes('1 个 Unicode 替换字符'));
   assert.ok(result.decodeWarnings[1].includes('2 个无法保守解析的 From 值'));
   assert.ok(result.decodeWarnings.every(note => result.warnings.includes(note)));
+});
+
+const reportOf = snapshot => { const summary = createAccountSummary(); summary.absorb(snapshot); return summary.report(); };
+
+test('aggregates account evidence, demotes marketing and keeps unclassified visible', async () => {
+  const result = await analyzeMailbox(new Blob([
+    message('From: Acme <no-reply@acme.example>\r\nDate: Sat, 01 Jan 2022 10:00:00 +0000\r\nSubject: Welcome to Acme! Your account is ready\r\nMessage-ID: <w1@acme.example>'),
+    message('From: Steam <no-reply@steam.example>\r\nDate: Sun, 02 Jan 2022 10:00:00 +0000\r\nSubject: 482913 is your Steam login code\r\nMessage-ID: <s1@steam.example>'),
+    message('From: Weekly <news@weekly.example>\r\nDate: Mon, 03 Jan 2022 10:00:00 +0000\r\nList-Unsubscribe: <https://weekly.example/u>\r\nSubject: Your weekly digest\r\nMessage-ID: <n1@weekly.example>'),
+    message('From: Digest <hi@news.example>\r\nDate: Tue, 04 Jan 2022 10:00:00 +0000\r\nList-Unsubscribe: <https://news.example/u>\r\nSubject: Welcome to the digest\r\nMessage-ID: <n2@news.example>'),
+    message('From: Mom <mom@family.example>\r\nDate: Wed, 05 Jan 2022 10:00:00 +0000\r\nSubject: Lunch on Sunday?\r\nMessage-ID: <f1@family.example>'),
+    message('From: bad address\r\nDate: Thu, 06 Jan 2022 10:00:00 +0000\r\nSubject: Welcome!\r\nMessage-ID: <x1@nowhere>'),
+  ]));
+  const report = reportOf(result.accounts);
+  assert.deepEqual(report.evidence.map(row => row.domain), ['acme.example', 'steam.example']);
+  assert.equal(report.evidence[0].counts.welcome, 1);
+  assert.equal(report.evidence[0].name, 'Acme');
+  assert.equal(new Date(report.evidence[0].first).toISOString(), '2022-01-01T10:00:00.000Z');
+  assert.equal(new Date(report.evidence[0].last).toISOString(), '2022-01-01T10:00:00.000Z');
+  assert.deepEqual(report.evidence[0].samples, ['<w1@acme.example>']);
+  assert.equal(report.evidence[1].counts.security, 1);
+  assert.deepEqual(report.mailingOnly.map(row => row.domain).sort(), ['news.example', 'weekly.example']);
+  assert.deepEqual(report.unclassified.shown.map(row => row.domain), ['family.example']);
+  assert.equal(report.unknownFrom, 1);
+});
+
+test('duplicate Message-IDs within a file count once for account evidence', async () => {
+  const result = await analyzeMailbox(new Blob([
+    message('From: a@acme.example\r\nSubject: Welcome\r\nMessage-ID: <dup@acme.example>'),
+    message('From: a@acme.example\r\nSubject: Welcome again\r\nMessage-ID: <dup@acme.example>'),
+  ]));
+  const report = reportOf(result.accounts);
+  assert.equal(report.evidence[0].counts.welcome, 1);
+  assert.equal(report.evidence[0].messageCount, 1);
+});
+
+test('evidenceSeen suppresses cross-file account counting and records counted IDs', async () => {
+  const evidenceSeen = new Set();
+  const first = await analyzeMailbox(new Blob([message('From: a@acme.example\r\nSubject: Welcome\r\nMessage-ID: <one@acme.example>')]), { evidenceSeen });
+  assert.deepEqual([...evidenceSeen], ['<one@acme.example>']);
+  assert.equal(reportOf(first.accounts).evidence[0].counts.welcome, 1);
+  const second = await analyzeMailbox(new Blob([message('From: a@acme.example\r\nSubject: Welcome back\r\nMessage-ID: <one@acme.example>')]), { evidenceSeen });
+  const merged = createAccountSummary();
+  merged.absorb(first.accounts);
+  merged.absorb(second.accounts);
+  const record = merged.report().evidence[0];
+  assert.equal(record.counts.welcome, 1);
+  assert.equal(record.messageCount, 1);
+});
+
+test('single option accepts a standalone RFC822 file without an envelope warning', async () => {
+  const raw = 'From: a@acme.example\r\nSubject: Verify your account\r\nMessage-ID: <e1@acme.example>\r\n\r\nbody\r\n';
+  const quiet = await analyzeMailbox(new Blob([raw]), { single: true });
+  assert.equal(quiet.messageCount, 1);
+  assert.ok(!quiet.warnings.some(value => value.includes('envelope')));
+  assert.equal(reportOf(quiet.accounts).evidence[0].counts.verify, 1);
+  const warned = await analyzeMailbox(new Blob([raw]));
+  assert.ok(warned.warnings.some(value => value.includes('envelope')));
+});
+
+test('account aggregation tolerates invalid Date headers', async () => {
+  const result = await analyzeMailbox(new Blob([message('From: a@acme.example\r\nDate: not a date\r\nSubject: Welcome\r\nMessage-ID: <d1@acme.example>')]));
+  const record = reportOf(result.accounts).evidence[0];
+  assert.equal(record.first, null);
+  assert.equal(record.last, null);
 });
 
 test('provider-reserved names omit folder creation and retain an explanatory mapping', () => {

@@ -8,7 +8,7 @@ const MAX_BATCH_EXPANDED = 512 * 1024 * 1024;
 
 function accepted(name) {
   const lower = name.toLowerCase();
-  return lower.endsWith('.xml') || lower.endsWith('.mbox');
+  return lower.endsWith('.xml') || lower.endsWith('.mbox') || lower.endsWith('.eml');
 }
 
 const sig = (view, offset) => view.getUint32(offset, true);
@@ -152,7 +152,8 @@ function extractVerified(archive, declared, batchExpanded) {
   // Construct and return files only after every wanted entry has passed integrity
   // checks. A bad later entry must not leak a partial archive into the result.
   const files = verified.map(({ entry, chunks }) => {
-    const extracted = new File(chunks, entry.name.split('/').pop(), { type: entry.name.toLowerCase().endsWith('.xml') ? 'application/xml' : 'application/mbox' });
+    const lower = entry.name.toLowerCase();
+    const extracted = new File(chunks, entry.name.split('/').pop(), { type: lower.endsWith('.xml') ? 'application/xml' : lower.endsWith('.eml') ? 'message/rfc822' : 'application/mbox' });
     extracted.sourcePath = entry.name;
     return extracted;
   });
@@ -171,7 +172,7 @@ export async function expandInputs(files) {
       continue;
     }
     if (!lower.endsWith('.zip')) {
-      warnings.push(`${name}：不支持该文件类型，请使用 XML、MBOX、ZIP 或已解压文件夹。`);
+      warnings.push(`${name}：不支持该文件类型，请使用 XML、MBOX、EML、ZIP 或已解压文件夹。`);
       continue;
     }
     if (file.size > MAX_ARCHIVE) {
@@ -185,7 +186,7 @@ export async function expandInputs(files) {
       const extracted = extractVerified(archive, declared, batchExpanded);
       batchExpanded += extracted.actualExpanded;
       output.push(...extracted.files);
-      if (!declared.acceptedCount) warnings.push(`${name}：没有找到 XML 或 MBOX。`);
+      if (!declared.acceptedCount) warnings.push(`${name}：没有找到 XML、MBOX 或 EML。`);
     } catch (error) {
       warnings.push(`${name}：ZIP 读取失败（${error.message}）。`);
     }

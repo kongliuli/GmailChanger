@@ -1,6 +1,6 @@
 # 账号清点与多邮箱接入 · 设计与调研(草案)
 
-状态:**设计阶段,未实现**。本文不是功能承诺;实现以代码和 CHANGELOG 为准。
+状态：P1–P4 已在 feat/account-inventory 分支实现（账号清点模式、EML 输入、改绑链接种子库、导入来源文档）；本文与实现不一致时以代码为准。
 所属分支:`feat/account-inventory`;不改动 0.1.x 维护线的安全边界。
 
 ## 1. 背景与威胁模型
@@ -25,7 +25,7 @@ HN 帖 [Discontinuation of third level domain registrations for the .name TLD](h
 ### 2.2 改绑链接数据
 
 - [JustDeleteMe](https://justdeleteme.xyz)(删号链接,crowdsourced `sites.json`)与 [JustGetMyData](https://justgetmydata.com)(数据导出链接,JDM 的 fork)证明"众包链接库"模式可行。
-- **两者都没有"更改账户邮箱"链接库**——这是我们的差异化资产:`src/data/change-email.json` 自建种子(首批 50–100 个常用服务),社区 PR 扩充。若借鉴 JDM 数据,引入前须核验其数据许可证。
+- **两者都没有"更改账户邮箱"链接库**——这是我们的差异化资产:`src/data/change-email.js` 自建种子(首批 50–100 个常用服务),社区 PR 扩充。若借鉴 JDM 数据,引入前须核验其数据许可证。
 
 ### 2.3 导出格式矩阵(多邮箱接入的输入面)
 

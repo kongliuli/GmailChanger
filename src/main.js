@@ -2,11 +2,12 @@ import './style.css';
 import { parseXml } from './imports.js';
 import { parseFilters, convertFilters } from './filters.js';
 import { buildFolders } from './mailbox.js';
-import { downloadText, gapsMarkdown, sendersCsv, foldersJson, migrationReadme } from './exports.js';
+import { downloadText, gapsMarkdown, sendersCsv, foldersJson, migrationReadme, accountsCsv, accountsMarkdown } from './exports.js';
 import { TARGETS, getTarget, defaultFolders, buildRecipe } from './targets.js';
+import { createAccountSummary, EVIDENCE_KEYS, changeEmailLink } from './accounts.js';
 import { t } from './i18n.js';
 
-const state = { step: 0, lang: 'zh', targetId: 'generic', filters: [], labels: new Set(), senders: new Map(), seen: new Set(), sources: [], warnings: [], overrides: new Map(), special: {}, rows: [], errors: [], conversion: { sieve: '', results: [], gaps: [] }, busy: false, progress: null, status: '', reviewFilter: 'all' };
+const state = { step: 0, lang: 'zh', mode: 'migrate', targetId: 'generic', filters: [], labels: new Set(), senders: new Map(), seen: new Set(), accountSeen: new Set(), accountSummary: createAccountSummary(), sources: [], warnings: [], overrides: new Map(), special: {}, rows: [], errors: [], conversion: { sieve: '', results: [], gaps: [] }, busy: false, progress: null, status: '', reviewFilter: 'all' };
 const imported = new Set();
 const app = document.querySelector('#app');
 let controller;
@@ -61,22 +62,38 @@ function render(focus=false) {
 }
 const heading = key => `<h2 id="step-title" tabindex="-1">${tr(key)}</h2>`;
 function targetPanel() {
-  return `${heading('target')}<p>${tr('targetHelp')}</p><fieldset><legend>${tr('target')}</legend><div class="target-grid">${TARGETS.map(item=>`<label class="target-card"><input type="radio" name="target" value="${item.id}" ${item.id===state.targetId?'checked':''}><span><strong>${esc(item.id==='generic' && state.lang==='en'?'Generic Sieve':item.id==='unknown' && state.lang==='en'?'Not decided':item.label)}</strong><small>${item.kind==='recipe'?tr('manual'):tr('unverified')}</small></span></label>`).join('')}</div></fieldset><details><summary>${tr('notes')}</summary><ul>${target().notes.map(note=>`<li>${esc(note)}</li>`).join('')}</ul></details>${target().docsUrl?`<a href="${esc(target().docsUrl)}" target="_blank" rel="noopener noreferrer">${tr('docs')}</a>`:''}`;
+  const modes = [['migrate','modeMigrate','modeMigrateHelp'],['inventory','modeInventory','modeInventoryHelp']].map(([value,label,help])=>`<label class="mode-card"><input type="radio" name="mode" value="${value}" ${state.mode===value?'checked':''}><span><strong>${tr(label)}</strong><small>${tr(help)}</small></span></label>`).join('');
+  const targetBlock = `<p>${tr('targetHelp')}</p><fieldset><legend>${tr('target')}</legend><div class="target-grid">${TARGETS.map(item=>`<label class="target-card"><input type="radio" name="target" value="${item.id}" ${item.id===state.targetId?'checked':''}><span><strong>${esc(item.id==='generic' && state.lang==='en'?'Generic Sieve':item.id==='unknown' && state.lang==='en'?'Not decided':item.label)}</strong><small>${item.kind==='recipe'?tr('manual'):tr('unverified')}</small></span></label>`).join('')}</div></fieldset><details><summary>${tr('notes')}</summary><ul>${target().notes.map(note=>`<li>${esc(note)}</li>`).join('')}</ul></details>${target().docsUrl?`<a href="${esc(target().docsUrl)}" target="_blank" rel="noopener noreferrer">${tr('docs')}</a>`:''}`;
+  return `${heading('target')}<fieldset class="modes"><legend>${tr('mode')}</legend><div class="mode-grid">${modes}</div></fieldset>${state.mode==='inventory'?`<p>${tr('inventoryIntro')}</p>`:targetBlock}`;
 }
 function importPanel() {
-  return `${heading('importTitle')}<p>${tr('importHelp')}</p><div id="drop" class="drop"><div class="actions"><button data-action="files" ${state.busy?'disabled':''}>${tr('files')}</button><button data-action="folder" ${state.busy?'disabled':''}>${tr('folder')}</button></div><input id="files" type="file" accept=".xml,.mbox,.zip" multiple hidden><input id="folder" type="file" webkitdirectory multiple hidden><p class="small">${tr('limits')}</p></div>${state.busy?`<p>${tr('busy')}</p><progress aria-label="${tr('progress')}" max="100" ${state.progress===null?'':`value="${state.progress}"`}></progress><span id="progress-text"></span><button data-action="cancel">${tr('cancel')}</button>`:`<button class="secondary" data-action="reset">${tr('reset')}</button>`}<h3>${tr('sources')}</h3>${state.sources.length?`<ul>${state.sources.map(source=>`<li>${esc(source.name)} — ${(source.size/1048576).toFixed(2)} MiB · ${source.count} ${tr('records')}</li>`).join('')}</ul>`:`<p>${tr('noData')}</p>`}${warningsPanel()}`;
+  return `${heading('importTitle')}<p>${tr('importHelp')}</p><div id="drop" class="drop"><div class="actions"><button data-action="files" ${state.busy?'disabled':''}>${tr('files')}</button><button data-action="folder" ${state.busy?'disabled':''}>${tr('folder')}</button></div><input id="files" type="file" accept=".xml,.mbox,.eml,.zip" multiple hidden><input id="folder" type="file" webkitdirectory multiple hidden><p class="small">${tr('limits')}</p></div>${state.busy?`<p>${tr('busy')}</p><progress aria-label="${tr('progress')}" max="100" ${state.progress===null?'':`value="${state.progress}"`}></progress><span id="progress-text"></span><button data-action="cancel">${tr('cancel')}</button>`:`<button class="secondary" data-action="reset">${tr('reset')}</button>`}<h3>${tr('sources')}</h3>${state.sources.length?`<ul>${state.sources.map(source=>`<li>${esc(source.name)} — ${(source.size/1048576).toFixed(2)} MiB · ${source.count} ${tr('records')}</li>`).join('')}</ul>`:`<p>${tr('noData')}</p>`}${warningsPanel()}`;
 }
 function warningsPanel() { return state.warnings.length?`<details open><summary>${tr('warnings')} (${state.warnings.length})</summary><ul>${state.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></details>`:''; }
 function reviewPanel() {
+  if (state.mode==='inventory') return inventoryReview();
   const results = state.conversion.results.filter(row=>state.reviewFilter==='all'||row.status===state.reviewFilter);
   return `${heading('reviewTitle')}<p>${tr('reviewHelp')}</p><p class="small">${tr('technical')}</p><label>${tr('filter')}<select id="review-filter">${['all','converted','approximate','skipped'].map(key=>`<option value="${key}" ${state.reviewFilter===key?'selected':''}>${tr(key)}</option>`).join('')}</select></label><div class="table-wrap"><table><caption>${tr('rules')} (${state.filters.length})</caption><thead><tr><th scope="col">${tr('rule')}</th><th scope="col">${tr('status')}</th><th scope="col">${tr('details')}</th></tr></thead><tbody>${results.map(row=>`<tr><td>${esc(row.id)}</td><td><span class="badge ${row.status}">${tr(row.status)}</span></td><td><details><summary>${tr('details')}</summary><pre>${esc(row.description)}</pre><ul>${row.issues.map(issue=>`<li>${esc(issue)}</li>`).join('')}</ul></details></td></tr>`).join('')}</tbody></table></div>${!state.filters.length?`<p>${tr('noneRules')}</p>`:''}<h3>${tr('senders')}</h3><p class="small">${tr('senderHelp')}</p>${senders().length?`<div class="table-wrap"><table><thead><tr><th>${tr('email')}</th><th>${tr('count')}</th></tr></thead><tbody>${senders().map(row=>`<tr><td>${esc(row.email)}</td><td>${row.count}</td></tr>`).join('')}</tbody></table></div>`:`<p>${tr('noneSenders')}</p>`}${warningsPanel()}`;
 }
+function inventoryReview() {
+  const report = state.accountSummary.report();
+  const fmt = time => time===null?'—':new Date(time).toISOString().slice(0,10);
+  const counts = row => EVIDENCE_KEYS.filter(key=>row.counts[key]).map(key=>`${tr(key)}×${row.counts[key]}`).join(' · ');
+  const link = row => { const site = changeEmailLink(row.domain); return site?.url ? `<a href="${esc(site.url)}" target="_blank" rel="noopener noreferrer">${tr('changeEmail')}</a>` : `<span class="badge skipped">${tr('notCatalogued')}</span>`; };
+  return `${heading('inventoryReviewTitle')}<p>${tr('inventoryHelp')}</p>${report.evidence.length?`<div class="table-wrap"><table><caption>${tr('accountsCount')} (${report.evidence.length})</caption><thead><tr><th scope="col">${tr('domainColumn')}</th><th scope="col">${tr('firstSeen')}</th><th scope="col">${tr('lastSeen')}</th><th scope="col">${tr('changeEmail')}</th></tr></thead><tbody>${report.evidence.map(row=>`<tr><td>${esc(row.domain)}${row.name?` <small>${esc(row.name)}</small>`:''}<details><summary>${counts(row)||'—'}</summary><pre>${esc(row.samples.join('\n'))}</pre></details></td><td>${fmt(row.first)}</td><td>${fmt(row.last)}</td><td>${link(row)}</td></tr>`).join('')}</tbody></table></div>`:`<p>${tr('noneRules')}</p>`}<details><summary>${tr('mailingOnlyTitle')} (${report.mailingOnly.length})</summary><ul>${report.mailingOnly.map(row=>`<li>${esc(row.domain)} — ${row.mailingCount}</li>`).join('')||'<li>—</li>'}</ul></details><details><summary>${tr('unclassifiedTitle')} (${report.unclassified.total})</summary><p class="small">${tr('unclassifiedNote')}</p><ul>${report.unclassified.shown.map(row=>`<li>${esc(row.domain)} — ${row.messageCount}</li>`).join('')||'<li>—</li>'}</ul></details>${report.overflowDomains?`<p class="notice">${tr('overflowNote')}</p>`:''}${report.unknownFrom?`<p class="small">${tr('unknownFromNote')}</p>`:''}${warningsPanel()}`;
+}
 function mappingPanel() {
+  if (state.mode==='inventory') return `${heading('mappingTitle')}<p>${tr('mappingSkipInventory')}</p>`;
   const defaults = defaultFolders(target());
   const field = (id,value,label) => `<label>${esc(label)}<input data-map="${id}" value="${esc(value)}" aria-invalid="${state.errors.some(error=>String(error.index)===id)}" aria-describedby="map-errors"></label>`;
   return `${heading('mappingTitle')}<p>${tr('mappingHelp')}</p><div id="map-errors" ${state.errors.length?'role="alert"':''}>${state.errors.length?`<ul>${[...new Set(state.errors.map(e=>tr(e.key)))].map(error=>`<li>${error}</li>`).join('')}</ul>`:''}</div><div class="grid">${field('archiveFolder',state.special.archiveFolder??defaults.archiveFolder,tr('archive'))}${field('trashFolder',state.special.trashFolder??defaults.trashFolder,tr('trash'))}</div>${state.rows.length?`<div class="table-wrap"><table><thead><tr><th>${tr('original')}</th><th>${tr('destination')}</th><th>${tr('notesColumn')}</th></tr></thead><tbody>${state.rows.map((row,i)=>`<tr><td>${esc(row.label)}</td><td>${field(String(i),row.folder,`${tr('destination')}: ${row.label}`)}</td><td>${row.notes.map(esc).join('; ')}</td></tr>`).join('')}</tbody></table></div>`:`<p>${tr('emptyMapping')}</p>`}`;
 }
 function exportPanel() {
+  if (state.mode==='inventory') {
+    const report = state.accountSummary.report();
+    const button = (type,label,enabled=true) => `<button data-export="${type}" ${state.busy||!enabled?'disabled':''}>${tr(label)}</button>`;
+    return `${heading('exportTitle')}<p>${tr('inventoryExportHelp')}</p><p>${tr('accountsCount')}: <strong>${report.evidence.length}</strong> · ${tr('mailingOnlyCount')}: <strong>${report.mailingOnly.length}</strong> · ${tr('unclassifiedCount')}: <strong>${report.unclassified.total}</strong></p><div class="actions">${button('accounts','downloadAccounts',!!report.evidence.length)}${button('accountsMd','downloadAccountsMd',!!report.evidence.length)}${button('guide','guide')}</div>${warningsPanel()}`;
+  }
   const recipe = target().kind === 'recipe';
   const active = recipe?0:state.conversion.results.filter(row=>row.status==='converted').length;
   const blocked = state.errors.length || state.busy;
@@ -86,7 +103,7 @@ function exportPanel() {
 function navigate(step) {
   if (state.busy || step<0 || step>4) return;
   if (step>1 && !state.sources.length) { state.status=tr('noData'); render(); return; }
-  if (step===4 && state.errors.length) { state.status=tr('mappingBlocked'); state.step=3; render(true); return; }
+  if (step===4 && state.mode!=='inventory' && state.errors.length) { state.status=tr('mappingBlocked'); state.step=3; render(true); return; }
   state.step=step; state.status=''; render(true);
 }
 app.addEventListener('click',async event=>{
@@ -98,13 +115,14 @@ app.addEventListener('click',async event=>{
     case 'next': navigate(state.step+1); break;
     case 'files': case 'folder': app.querySelector(`#${button.dataset.action}`).click(); break;
     case 'cancel': controller?.abort(); break;
-    case 'reset': state.filters=[];state.labels.clear();state.senders.clear();state.seen.clear();state.sources=[];state.warnings=[];state.overrides.clear();state.special={};imported.clear();state.status='';recompute();render();break;
+    case 'reset': state.filters=[];state.labels.clear();state.senders.clear();state.seen.clear();state.accountSeen.clear();state.accountSummary=createAccountSummary();state.sources=[];state.warnings=[];state.overrides.clear();state.special={};imported.clear();state.status='';recompute();render();break;
     case 'copy': try { await navigator.clipboard.writeText(state.conversion.sieve);state.status=tr('copied'); } catch {state.status=tr('copyFailed');} app.querySelector('#status').textContent=state.status;break;
   }
 });
 app.addEventListener('change',event=>{
   const input=event.target;
   if (input.id==='language') {state.lang=input.value;render();return;}
+  if (input.name==='mode') {state.mode=input.value;recompute();render();return;}
   if (input.name==='target') {state.targetId=input.value;recompute();render();return;}
   if (input.id==='files'||input.id==='folder') {void processFiles([...input.files]);return;}
   if (input.id==='review-filter') {state.reviewFilter=input.value;render();app.querySelector('#review-filter').focus();return;}
@@ -137,9 +155,9 @@ async function processFiles(files) {
           if(signal.aborted)break;
           for(const rule of rules){if(rule.actions.label)state.labels.add(rule.actions.label);rule.id=`${entry.path} / ${rule.id}`;}
           state.filters.push(...rules);count=rules.length;
-        } else if(name.endsWith('.mbox')) {
-          const sentHint=/^(sent|sent mail|已发送|已发送邮件|寄件備份|gesendet|envoyés)\.mbox$/i.test(name.split(/[/\\]/).pop());
-          const result=await runWorker('analyze',{file,sentHint,seen:[...state.seen]},signal,info=>{
+        } else if(name.endsWith('.mbox') || name.endsWith('.eml')) {
+          const sentHint=name.endsWith('.eml')?false:/^(sent|sent mail|已发送|已发送邮件|寄件備份|gesendet|envoyés)\.mbox$/i.test(name.split(/[/\\]/).pop());
+          const result=await runWorker('analyze',{file,sentHint,single:name.endsWith('.eml'),seen:[...state.seen],evidenceSeen:[...state.accountSeen]},signal,info=>{
             state.progress=Math.round((index+info.bytesRead/Math.max(1,info.totalBytes))/expanded.files.length*100);
             const progress=app.querySelector('progress');if(progress)progress.value=state.progress;
             const text=app.querySelector('#progress-text');if(text)text.textContent=`${state.progress}% · ${info.messageCount}`;
@@ -149,6 +167,8 @@ async function processFiles(files) {
           for(const sender of result.senders)state.senders.set(sender.email,(state.senders.get(sender.email)||0)+sender.count);
           if(Array.isArray(result.seen))state.seen=new Set(result.seen);
           else state.warnings.push('This analyzer did not return a shared deduplication index; cross-file counts may repeat.');
+          if(result.accounts)state.accountSummary.absorb(result.accounts);
+          if(Array.isArray(result.evidenceSeen))state.accountSeen=new Set(result.evidenceSeen);
           state.warnings.push(...result.warnings.map(w=>`${entry.name}: ${w}`));count=result.messageCount;
         }
         imported.add(signature);state.sources.push({name:entry.path,size:entry.size,count});
@@ -159,11 +179,20 @@ async function processFiles(files) {
   finally{state.busy=false;recompute();render();}
 }
 function guideText() {
-  const files=[{name:target().kind==='recipe'?'migration-recipe.md':'rules.sieve',purpose:tr('rules')},{name:'folders.json',purpose:tr('folders')},{name:'senders.csv',purpose:tr('senders')},{name:'gaps.md',purpose:tr('warnings')}];
+  const files=state.mode==='inventory'
+    ?[{name:'accounts.csv',purpose:tr('accountsFile')},{name:'accounts.md',purpose:tr('accountsFile')}]
+    :[{name:target().kind==='recipe'?'migration-recipe.md':'rules.sieve',purpose:tr('rules')},{name:'folders.json',purpose:tr('folders')},{name:'senders.csv',purpose:tr('senders')},{name:'gaps.md',purpose:tr('warnings')}];
   return migrationReadme({target:state.targetId,files,results:state.conversion.results,folders:state.rows,senders:senders(),warnings:state.warnings,...state.special});
 }
 function exportFile(type) {
-  if(state.busy||state.errors.length)return;
+  if(state.busy||(state.mode!=='inventory'&&state.errors.length))return;
+  if(state.mode==='inventory') {
+    const report=state.accountSummary.report();
+    if(type==='accounts')downloadText('accounts.csv',accountsCsv(report),'text/csv;charset=utf-8');
+    if(type==='accountsMd')downloadText('accounts.md',accountsMarkdown(report),'text/markdown;charset=utf-8');
+    if(type==='guide')downloadText('README-migration.md',guideText(),'text/markdown;charset=utf-8');
+    return;
+  }
   const recipe=target().kind==='recipe';
   if(type==='sieve'&&!recipe)downloadText('rules.sieve',state.conversion.sieve,'application/sieve;charset=utf-8');
   if(type==='folders')downloadText('folders.json',foldersJson(state.rows,{target:state.targetId,...state.special}),'application/json;charset=utf-8');

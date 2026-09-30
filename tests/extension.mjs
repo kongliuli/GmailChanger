@@ -76,9 +76,26 @@ try {
   const folders = JSON.parse(await download('folders', 'folders.json'));
   for (const label of ['Work', 'FirstMailbox', 'SecondMailbox']) assert.ok(folders.folders.some(folder => folder.gmailLabel === label), `Missing exported folder: ${label}`);
   assert.match(await download('senders', 'senders.csv'), /me@example\.com/);
+
+  // Inventory mode: account evidence from the same local header parser.
+  await page.locator('[data-step="0"]').click();
+  await page.locator('input[name="mode"][value="inventory"]').check();
+  await page.locator('[data-action="next"]').click();
+  const inventoryMbox = [
+    'From no-reply@acme.example Sat Jan 01 00:00:00 +0000 2022\nFrom: Acme <no-reply@acme.example>\nTo: user@example.org\nDate: Sat, 01 Jan 2022 00:00:00 +0000\nMessage-ID: <w1@acme.example>\nSubject: Welcome to Acme! Your account is ready\n\nLocal fixture.\n',
+    'From news@weekly.example Sat Jan 02 00:00:00 +0000 2022\nFrom: Weekly <news@weekly.example>\nTo: user@example.org\nDate: Sun, 02 Jan 2022 00:00:00 +0000\nList-Unsubscribe: <https://weekly.example/u>\nMessage-ID: <n1@weekly.example>\nSubject: Your weekly digest\n\nLocal fixture.\n',
+  ].join('');
+  await page.locator('#files').setInputFiles({ name: 'All Mail.mbox', mimeType: 'application/mbox', buffer: Buffer.from(inventoryMbox) });
+  await page.getByRole('status').getByText(/分析完成|Analysis complete/).waitFor();
+  await page.locator('[data-action="next"]').click();
+  assert.ok((await page.locator('#app').innerText()).includes('acme.example'), 'Missing inventory evidence domain');
+  await page.locator('[data-action="next"]').click();
+  await page.locator('[data-action="next"]').click();
+  assert.match(await download('accounts', 'accounts.csv'), /acme\.example/);
+  assert.match(await download('accountsMd', 'accounts.md'), /acme\.example/);
   assert.deepEqual(await page.evaluate(() => globalThis.cspViolations), [], 'Extension CSP violations');
   assert.deepEqual(errors, [], 'Extension page/console errors');
-  console.log('Packaged Chromium extension five-step smoke passed: CSP, local XML/MBOX Workers, mappings and exports.');
+  console.log('Packaged Chromium extension smoke passed: CSP, local XML/MBOX Workers, mappings, exports, and the account-inventory mode.');
 } finally {
   try { await context?.close(); }
   finally { await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); }

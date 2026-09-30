@@ -9,8 +9,10 @@
 - 将 Gmail `mailFilters.xml` **保守转换**成通用 Sieve，并显示已转换 / 近似 / 已跳过。
 - 无法安全转换的规则写入 `gaps.md`；不支持的有效字段跳过整条规则，近似规则默认**整段注释禁用**。
 - 流式分析 MBOX 的必要邮件头，规划标签对应的文件夹；仅从 Sent / 已发送线索中分析历史发件地址候选。
-- 接受 XML、MBOX、受限 ZIP，或已解压文件夹；由 Web Worker 分担解包与分析。
+- 账号清点模式：按发件域归集注册、欢迎、验证、收据、安全类账号证据；营销通讯不计入证据，未分类域名显式列出，附本地内置的改绑邮箱链接目录。
+- 接受 XML、MBOX、EML、受限 ZIP，或已解压文件夹；EML 覆盖 Proton、Thunderbird、Fastmail 的导出形态，见[导入来源](docs/import-sources.md)。
 - 本地导出 `rules.sieve`、`folders.json`、`senders.csv`、`gaps.md`。
+- 账号清点模式本地导出 `accounts.csv` 与 `accounts.md`（清单不保证完整，需人工复核）。
 
 **不做：**邮件传输、IMAP 上传、Gmail/目标邮箱登录、自动创建文件夹、自动修改或启用邮箱规则、自动配置发信身份。不支持 TGZ 或 Outlook `.rwz`；不是完整 Gmail 查询语言/MIME 解析器。历史发件地址不是经验证的账号或权限清单。
 
@@ -43,7 +45,7 @@ Message-ID 去重每个集合最多 **100000** 个。底层 `analyzeMailbox` 已
 
 界面使用五步向导。中文步骤名依次为 **1 选择目标、2 导入数据、3 检查转换、4 文件夹映射、5 导出结果**；英文依次为 **Target、Import、Review、Folders、Export**。
 
-1. **选择目标 / Target：**选择或确认目标服务商；这只影响候选能力检查和输出方式，不会登录目标邮箱。
+1. **选择目标 / Target：**选择或确认目标服务商；这只影响候选能力检查和输出方式，不会登录目标邮箱。此步同时选择**使用模式**：迁移配置或账号清点。
 2. **导入数据 / Import：**Gmail 设置 →“过滤器和被屏蔽的地址”→ 导出 `mailFilters.xml`；如需标签和历史发件地址，通过 Google Takeout 导出 Gmail。选择 XML、MBOX、ZIP 或已解压文件夹，等待本地分析并查看警告。取消时不要把部分完成结果当作完整迁移结果。
 3. **检查转换 / Review：**阅读“已转换 / 近似 / 已跳过”和“需人工检查”。近似规则默认不运行；不要未经检查批量取消注释。
 4. **文件夹映射 / Folders：**确认标签映射、重名/层级提示与历史发件地址候选，手动验证目标服务商的文件夹及发信权限。
@@ -100,10 +102,12 @@ src/imports.js    输入识别、受限 ZIP、DOMParser 入口
 src/mailbox.js    流式 MBOX 邮件头分析、文件夹规划
 src/worker.js     Web Worker 边界
 src/exports.js    本地下载、CSV 与缺口报告
+src/accounts.js   账号清点分类、按域聚合与改绑链接查找
+src/data/         改绑邮箱链接种子库（本地打包）
 public/           扩展静态资源
 scripts/          双浏览器打包、ZIP 与包验证
 tests/            Node 单测及 Playwright Chromium 检查
-docs/             架构、规则、服务商、测试数据和发布说明
+docs/             架构、规则、服务商、导入来源、测试数据和发布说明
 .github/          CI、标签发布与贡献模板
 ```
 
@@ -111,7 +115,7 @@ docs/             架构、规则、服务商、测试数据和发布说明
 
 ## 验证状态
 
-0.1.1 已验证基线：**157 个 Node 测试中 156 个通过、1 个浏览器原生 DOMParser 单元测试在 Node 中跳过**；相关 XML 解析由 Playwright 浏览器测试覆盖。测试数量会随新增用例变化，请以本次命令输出为准。
+本分支已验证基线：**171 个 Node 测试中 170 个通过、1 个浏览器原生 DOMParser 单元测试在 Node 中跳过**；相关 XML 解析由 Playwright 浏览器测试覆盖。测试数量会随新增用例变化，请以本次命令输出为准。
 
 - Playwright 使用 Chromium 验证 DOMParser、页面导入和权限声明；不是完整跨浏览器/商店测试。
 - **Fastmail/Proton 未使用真实账号验证兼容性。**
@@ -120,7 +124,7 @@ docs/             架构、规则、服务商、测试数据和发布说明
 
 ## English summary
 
-GmailChanger 0.1.1 is a beta, Manifest V3, local-only **configuration assistant, not a mail migration tool**. It conservatively converts Gmail filter XML to Sieve, analyzes MBOX headers for folder plans and sent-address candidates, and exports four local reports. Unsupported active fields skip the whole rule; approximate rules are **commented out by default**.
+GmailChanger 0.1.1 is a beta, Manifest V3, local-only **configuration assistant, not a mail migration tool**. It conservatively converts Gmail filter XML to Sieve, analyzes MBOX headers for folder plans and sent-address candidates, and exports four local reports. An inventory mode scans the same local headers to list services this address signed up with (signup, welcome, verification, receipt and security evidence; marketing mail never counts as evidence) and exports `accounts.csv`/`accounts.md` with a bundled change-email link catalog. Imports accept XML, MBOX, EML, restricted ZIP or extracted folders. Unsupported active fields skip the whole rule; approximate rules are **commented out by default**.
 
 No mail transfer, IMAP upload, TGZ, Outlook `.rwz`, host permissions, runtime network requests, telemetry or accounts. ZIP limits: 512 MiB input, 128 MiB per entry, 256 MiB accepted expanded data and 2000 accepted entries; unsafe archives are rejected. Message-ID sets are capped at 100000. The analyzer API accepts a shared `seen` set; per-import-batch sharing and reset behavior are planned while the Worker protocol is still being implemented, so the current UI does not yet guarantee cross-MBOX deduplication.
 

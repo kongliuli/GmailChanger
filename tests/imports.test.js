@@ -44,6 +44,19 @@ test('extracts XML/MBOX and preserves source paths', async () => {
   assert.ok(result.files.some(item => item.sourcePath === 'Takeout/Mail/Sent.mbox'));
 });
 
+test('accepts standalone EML files and EML entries inside ZIP archives', async () => {
+  const eml = encoder.encode('From: a@b.example\r\nSubject: Verify your account\r\n\r\nx\r\n');
+  const result = await expandInputs([new File([eml], 'proton-export.eml', { type: 'message/rfc822' })]);
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.files.length, 1);
+  assert.equal(result.files[0].sourcePath, 'proton-export.eml');
+  const zip = zipSync({ 'proton/export000001.eml': eml, 'meta.json': encoder.encode('{}') });
+  const zipped = await expandInputs([file(zip)]);
+  assert.deepEqual(zipped.warnings, []);
+  assert.equal(zipped.files.length, 1);
+  assert.equal(zipped.files[0].sourcePath, 'proton/export000001.eml');
+});
+
 test('rejects stored payload corruption with matching local and central CRC', async () => {
   const zip = zipSync({ 'good.xml': encoder.encode('<feed/>'), 'bad.mbox': encoder.encode('original data') }, { level: 0 });
   const { view, entries } = records(zip);

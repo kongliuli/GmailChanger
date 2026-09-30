@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build && node scripts/package.mjs && node scripts/archive.mjs",
-    "test": "node --test tests/exports.test.js tests/filters.test.js tests/imports.test.js tests/mailbox.test.js tests/query.test.js tests/targets.test.js",
+    "test": "node --test tests/accounts.test.js tests/exports.test.js tests/filters.test.js tests/imports.test.js tests/mailbox.test.js tests/query.test.js tests/targets.test.js",
     "test:browser": "node tests/browser.mjs && node tests/extension.mjs", 
     "check": "npm test && npm run build && npm run test:browser && node scripts/verify-packages.mjs"
   },
